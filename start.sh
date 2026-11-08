@@ -17,6 +17,34 @@ else
     UDPGW_MAX_CLIENTS="1000"
 fi
 
+# ═══════════════════════════════════════════════════════════════
+# DEBUG: Cetak env yang berhubungan dengan tunnel (biar ketahuan)
+# ═══════════════════════════════════════════════════════════════
+echo "═══════════════════════════════════════════════"
+echo "[ENV] TOKEN     = [${TOKEN:0:20}...] (len=${#TOKEN})"
+echo "[ENV] ARGO_PORT = ${ARGO_PORT:-<empty>}"
+echo "[ENV] UUID      = ${UUID:-<empty>}"
+echo "[ENV] NAME      = ${NAME:-<empty>}"
+echo "═══════════════════════════════════════════════"
+
+# ═══════════════════════════════════════════════════════════════
+# PENTING — Tulis TOKEN ke FILE agar Go binary bisa baca
+# (Go autoResumeTunnel() baca /tmp/zt_single_token.txt, BUKAN env)
+# ═══════════════════════════════════════════════════════════════
+if [ -n "$TOKEN" ]; then
+    # Bersihkan newline/quote/space dari token (yang bikin "Invalid secret")
+    CLEAN_TOKEN=$(printf '%s' "$TOKEN" | tr -d '\r\n\t ' | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+    printf '%s' "$CLEAN_TOKEN" > /tmp/zt_single_token.txt
+    echo "[TOKEN] ✅ Tersimpan di /tmp/zt_single_token.txt (len=${#CLEAN_TOKEN})"
+    echo "[TOKEN] Preview: $(head -c 20 /tmp/zt_single_token.txt)..."
+else
+    rm -f /tmp/zt_single_token.txt
+    echo "[TOKEN] ⚠️  env TOKEN KOSONG — quick tunnel akan dipakai"
+fi
+
+# ═══════════════════════════════════════════════════════════════
+# KERNEL TWEAKS
+# ═══════════════════════════════════════════════════════════════
 echo "[*] Kernel tweaks..."
 sysctl -w net.ipv4.tcp_tw_reuse=1 2>/dev/null
 sysctl -w net.ipv4.tcp_fin_timeout=10 2>/dev/null
@@ -34,7 +62,9 @@ else
     sysctl -w net.ipv4.tcp_congestion_control=cubic 2>/dev/null
 fi
 
-# Banner
+# ═══════════════════════════════════════════════════════════════
+# BANNER DROPBEAR
+# ═══════════════════════════════════════════════════════════════
 if [ -n "$CUSTOM_BANNER" ]; then
     echo -e "$CUSTOM_BANNER" > /etc/dropbear_banner
 else
@@ -52,7 +82,9 @@ else
 EOF
 fi
 
-# Stunnel
+# ═══════════════════════════════════════════════════════════════
+# STUNNEL + DROPBEAR
+# ═══════════════════════════════════════════════════════════════
 SSL_INTERNAL_PORT="2443"
 mkdir -p /etc/stunnel /var/run/stunnel4
 openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 \
@@ -78,20 +110,36 @@ EOF
 rm -f /var/run/stunnel4/stunnel.pid 2>/dev/null
 stunnel4 /etc/stunnel/stunnel.conf
 
+# ═══════════════════════════════════════════════════════════════
 # UDPGW
+# ═══════════════════════════════════════════════════════════════
 if [ -f /usr/local/bin/badvpn-udpgw ]; then
     echo "[*] Starting badvpn-udpgw on ${UDPGW_PORT}..."
     /usr/local/bin/badvpn-udpgw --listen-addr 0.0.0.0:${UDPGW_PORT} \
         --max-clients ${UDPGW_MAX_CLIENTS} --max-connections-for-client 50 &
 fi
 
-# Named tunnel via env (opsional)
+# ═══════════════════════════════════════════════════════════════
+# 🔥 ZERO TRUST TUNNEL — SAMA PERSIS DENGAN NODE VERSION
+#    Port default 8880 (WS SSH), BUKAN 8001
+# ═══════════════════════════════════════════════════════════════
+TARGET_ZT_PORT="${ARGO_PORT:-8880}"
+
 if [ -n "$TOKEN" ]; then
-    echo "[*] Starting Zero Trust tunnel..."
+    echo "[*] Starting Zero Trust tunnel → localhost:${TARGET_ZT_PORT} (WS SSH)"
     /usr/local/bin/cloudflared tunnel run --protocol http2 --no-tls-verify \
-        --token "$TOKEN" --url "http://localhost:${ARGO_PORT:-8001}" \
+        --token "$(cat /tmp/zt_single_token.txt)" \
+        --url "http://localhost:${TARGET_ZT_PORT}" \
         > /tmp/named_tunnel.log 2>&1 &
+    echo "[*] Cloudflared PID: $!"
+else
+    echo "[*] TOKEN kosong — Go binary akan jalankan quick tunnel"
 fi
 
-# Go binary handle: mux (8881) + wsproxy (8880) + server (8081)
+sleep 1
+
+# ═══════════════════════════════════════════════════════════════
+# GO BINARY — handle mux(8881) + wsproxy(8880) + server(8081)
+# ═══════════════════════════════════════════════════════════════
+echo "[*] Executing /app/panel..."
 exec /app/panel
