@@ -17,7 +17,7 @@ jobs:
       - name: Prepare lowercase image name
         id: prep
         run: |
-          IMG="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/neb"
+          IMG="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/gogo"
           echo "image=$IMG" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
